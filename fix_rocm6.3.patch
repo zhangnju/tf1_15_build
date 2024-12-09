@@ -1,0 +1,178 @@
+diff --git a/.tf_configure.bazelrc.rocm61 b/.tf_configure.bazelrc.rocm61
+index 5ee08e3b85..c4e4a55e02 100644
+--- a/.tf_configure.bazelrc.rocm61
++++ b/.tf_configure.bazelrc.rocm61
+@@ -1,10 +1,10 @@
+ build --action_env PYTHON_BIN_PATH="/usr/bin/python3"
+-build --action_env PYTHON_LIB_PATH="/usr/local/lib/python3.7/site-packages"
++build --action_env PYTHON_LIB_PATH="/usr/local/lib/python3.8/site-packages"
+ build --python_path="/usr/bin/python3"
+ build:xla --define with_xla_support=true
+ build --config=xla
+ build --config=rocm
+-build --action_env ROCM_TOOLKIT_PATH="/opt/rocm-6.1.0"
++build --action_env ROCM_TOOLKIT_PATH="/opt/rocm-6.3.0-14671/"
+ build:opt --copt=-march=haswell
+ build:opt --copt=-Wno-sign-compare
+ build:opt --host_copt=-march=haswell
+diff --git a/install_rocm61.sh b/install_rocm61.sh
+index c726616303..a1e13119ef 100755
+--- a/install_rocm61.sh
++++ b/install_rocm61.sh
+@@ -9,19 +9,21 @@ echo $EXTERNAL_DIR
+ #    cp -r -d cuda-12.1_cudnn8.9.6_trt8.6.1 $EXTERNAL_DIR/usr/local/cuda-12.1
+ #    ln -s $EXTERNAL_DIR/usr/local/cuda-12.1 /usr/local
+ #fi
+-
+-export LD_LIBRARY_PATH=/opt/rocm-6.1.0/lib:/lib64:/home/dongjunchen.djc/rocmlibs_patch:/opt/cc/lib/
+-
+-
+-
++ 
++export LD_LIBRARY_PATH=/opt/rocm-6.3.0-14671/lib:/lib64:/home/dongjunchen.djc/rocmlibs_patch:/opt/cc/lib/
++export USE_BAZEL_VERSION=4.1.0
++ 
++ 
+ export GCC_HOST_COMPILER_PATH=/usr/bin/gcc
+-
++ 
+ declare -a targets=(
++                    # "//tensorflow/tools/pip_package:build_pip_package"
+                     "//tensorflow:libtensorflow_framework.so"
+                     "//tensorflow:libtensorflow_cc.so"
+                     #"//tensorflow/core/kernels:cast_op_test"
+                     #"//tensorflow/core:test"
+-                    #"//tensorflow/core:testlib"
++                    # "//tensorflow/core/kernels:indicator_matmul_op_test"
++                    # "//tensorflow/core:testlib"
+                     #"//tensorflow/core/kernels:ops_testutil"
+ )
+ declare -a install_targets=("tensorflow/libtensorflow_framework.so"
+@@ -32,7 +34,7 @@ declare -a install_targets=("tensorflow/libtensorflow_framework.so"
+                             "tensorflow/core/libtestlib.so"
+                             "tensorflow/core/kernels/libops_testutil.so"
+ )
+-
++ 
+ #if tf_configure.bazelrc.cuda12 exist
+ if [ -f ".tf_configure.bazelrc.rocm61" ]; then
+     cp .tf_configure.bazelrc.rocm61 .tf_configure.bazelrc
+@@ -40,14 +42,28 @@ if [ -f ".tf_configure.bazelrc.rocm61" ]; then
+ else
+     yes "" | TF_NEED_ROCM=1 ROCM_TOOLKIT_PATH=${ROCM_INSTALL_DIR} PYTHON_BIN_PATH=/usr/bin/python3 PYTHON_BIN_PATH=/usr/bin/python3 ./configure
+ fi
+-
++ 
+ ## now loop through the above array
+ export TEST_TMPDIR=$(dirname `readlink -f $0`)/../_external/_bazel_$(whoami)/rocm61_cache
+ for target in "${targets[@]}"
+ do
+-    bazel build --experimental_ui_max_stdouterr_bytes=-1 -c opt --copt -g --strip=never --copt=-mavx2 --config=rocm --copt -mfpmath=both --copt -mfma --copt -msse4.2 --copt -D_GLIBCXX_USE_CXX11_ABI=0  $target
++    bazel build --incompatible_restrict_string_escapes=false \
++                --experimental_ui_max_stdouterr_bytes=-1 \
++                -c opt --copt -g --strip=never --copt=-mavx2 \
++                --config=rocm --copt -mfpmath=both \
++                --copt -mfma --copt -msse4.2 \
++                --copt -Wno-invalid-constexpr \
++                --copt -Wno-deprecated-builtins \
++                --copt -Wno-unused-command-line-argument \
++                --copt -Wno-unused-but-set-variable \
++                --copt -Wno-final-dtor-non-final-class \
++                --copt -Wno-deprecated-declarations \
++                --copt -Wno-sign-compare \
++                --copt -Wno-bitwise-instead-of-logical \
++                --action_env=TF_ROCM_AMDGPU_TARGETS=gfx942 \
++                --copt -D_GLIBCXX_USE_CXX11_ABI=0  $target
+ done
+-
++ 
+ #EXTERNAL_DIR="../_external"
+ #EXTERNAL_DIR=`readlink -f $EXTERNAL_DIR`
+ #HEADER_DIR=$EXTERNAL_DIR"/usr/local/include/tf_rocm61"
+@@ -98,7 +114,7 @@ done
+ #cd $NSYNC_DIR
+ #find . -name '*.h' -exec cp --parents \{\} $HEADER_DIR/ \;
+ #cd -
+-
++ 
+ #ABSL_DIR=$BAZEL_EXTERNAL_DIR"com_google_absl/absl/"
+ #rm $HEADER_DIR/absl -rf
+ #cp -r $ABSL_DIR $HEADER_DIR/absl
+@@ -107,3 +123,4 @@ done
+ #FARMHASH=$BAZEL_EXTERNAL_DIR"farmhash_archive/src/farmhash.h"
+ #cp $FARMHASH $HEADER_DIR
+ #rm -rf cuda-12.1*
++ 
+\ No newline at end of file
+diff --git a/tensorflow/core/kernels/dropout_op_gpu.cu.cc b/tensorflow/core/kernels/dropout_op_gpu.cu.cc
+index a317261d8c..2155a02031 100644
+--- a/tensorflow/core/kernels/dropout_op_gpu.cu.cc
++++ b/tensorflow/core/kernels/dropout_op_gpu.cu.cc
+@@ -187,18 +187,18 @@ void ApplyDropout<GPUDevice, T>::operator()(const GPUDevice& d, T* out,
+   // for FP32, it's optimal to run at 256x256
+   if (std::is_same<T, float>::value && num_blocks > 256) num_blocks = 256;
+ 
+-  if (do_half2) {
+-    TF_CHECK_OK(GpuLaunchKernel(
+-        RNGAndApplyDropoutKernel<half2, half2, half2>, num_blocks,
+-        kThreadInBlock, 0, d.stream(), gen, num_elements,
+-        reinterpret_cast<half2*>(out), reinterpret_cast<const half2*>(in),
+-        __floats2half2_rn(rate, rate), __floats2half2_rn(scale, scale)));
+-  } else {
+-    TF_CHECK_OK(GpuLaunchKernel(
+-        RNGAndApplyDropoutKernel<T, half2, float2>, num_blocks, kThreadInBlock,
+-        0, d.stream(), gen, num_elements, out, in,
+-        __floats2half2_rn(rate, rate), make_float2(scale, scale)));
+-  }
++  // if (do_half2) {
++  //   TF_CHECK_OK(GpuLaunchKernel(
++  //       RNGAndApplyDropoutKernel<half2, half2, half2>, num_blocks,
++  //       kThreadInBlock, 0, d.stream(), gen, num_elements,
++  //       reinterpret_cast<half2*>(out), reinterpret_cast<const half2*>(in),
++  //       __floats2half2_rn(rate, rate), __floats2half2_rn(scale, scale)));
++  // } else {
++  //   TF_CHECK_OK(GpuLaunchKernel(
++  //       RNGAndApplyDropoutKernel<T, half2, float2>, num_blocks, kThreadInBlock,
++  //       0, d.stream(), gen, num_elements, out, in,
++  //       __floats2half2_rn(rate, rate), make_float2(scale, scale)));
++  // }
+ }
+ 
+ template <typename T>
+diff --git a/tensorflow/workspace.bzl b/tensorflow/workspace.bzl
+index cac54d15b6..ad8f1d090c 100755
+--- a/tensorflow/workspace.bzl
++++ b/tensorflow/workspace.bzl
+@@ -422,6 +422,7 @@ def tf_repositories(path_prefix = "", tf_repo_name = ""):
+     # 310ba5ee72661c081129eb878c1bbcec936b20f0 is based on 3.8.0 with a fix for protobuf.bzl.
+     # 26a72105bfc1f9881022b21b0d0cdb108ecdfd0c is support rawstring
+     PROTOBUF_URLS = [
++        "http://127.0.0.1:8000/protobuf_add_raw_string_type-6a48951753ad6d49268c844d4fd2458c4f452b9c.tar.gz",
+         "http://search-cicd.oss-cn-hangzhou-zmf.aliyuncs.com/protobuf%2Fmirrors%2Fadd_raw_string_type-6a48951753ad6d49268c844d4fd2458c4f452b9c.tar.gz",
+         "http://search-cicd.oss-cn-hangzhou-zmf.aliyuncs.com/protobuf%2Fadd_raw_string_type-6a48951753ad6d49268c844d4fd2458c4f452b9c.tar.gz",
+     ]
+diff --git a/third_party/flatbuffers/workspace.bzl b/third_party/flatbuffers/workspace.bzl
+index f402c850e7..e93215da92 100644
+--- a/third_party/flatbuffers/workspace.bzl
++++ b/third_party/flatbuffers/workspace.bzl
+@@ -8,6 +8,7 @@ def repo():
+         strip_prefix = "flatbuffers-1f5eae5d6a135ff6811724f6c57f911d1f46bb15",
+         sha256 = "b2bb0311ca40b12ebe36671bdda350b10c7728caf0cfe2d432ea3b6e409016f3",
+         urls = [
++            "http://127.0.0.1:8000/flatbuffers.tar.gz",
+             "http://gitlab.alibaba-inc.com/odps_tensorflow/other/raw/master/mirror.bazel.build/github.com/google/flatbuffers/archive/1f5eae5d6a135ff6811724f6c57f911d1f46bb15.tar.gz",
+             "http://gitlab.alibaba-inc.com/odps_tensorflow/other/raw/master/github.com/google/flatbuffers/archive/1f5eae5d6a135ff6811724f6c57f911d1f46bb15.tar.gz",
+         ],
+diff --git a/third_party/gpus/rocm_configure.bzl b/third_party/gpus/rocm_configure.bzl
+index f19e1b0b9d..9c7a7273c3 100644
+--- a/third_party/gpus/rocm_configure.bzl
++++ b/third_party/gpus/rocm_configure.bzl
+@@ -194,6 +194,8 @@ def _rocm_include_path(repository_ctx, rocm_config):
+     inc_dirs.append(rocm_config.rocm_toolkit_path + "/llvm/lib/clang/15.0.0/include")
+     inc_dirs.append(rocm_config.rocm_toolkit_path + "/lib/llvm/lib/clang/17/include")
+     inc_dirs.append(rocm_config.rocm_toolkit_path + "/llvm/lib/clang/17/include")
++    inc_dirs.append(rocm_config.rocm_toolkit_path + "/lib/llvm/lib/clang/18/include")
++    inc_dirs.append(rocm_config.rocm_toolkit_path + "/llvm/lib/clang/18/include")
+ 
+     # Add rocrand and hiprand headers
+     inc_dirs.append(rocm_config.rocm_toolkit_path + "/rocrand/include")
